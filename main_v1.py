@@ -34,18 +34,16 @@ from langchain_text_splitters import (
     RecursiveCharacterTextSplitter,
 )
 
-# Load environment variables
-load_dotenv()
-warnings.filterwarnings("ignore")
-
 class DataLoader:
     def __init__(self, data_path):
         self.data_path = data_path
-        self.docs_dict = {}
+        self.docs_dict_page = {}
+        self.docs_dict_chunk = {}
     
     def load_data(self):
         counter = 1
         for filename in os.listdir(self.data_path):
+            print("Loading {}-th data...".format(counter))
             if filename.endswith(".pdf"):
                 new_filename = f"{counter}.pdf"
                 old_file_path = os.path.join(self.data_path, filename)
@@ -53,9 +51,29 @@ class DataLoader:
                 os.rename(old_file_path, new_file_path)
                 layzer = UpstageLayoutAnalysisLoader(new_file_path, split="page")
                 docs = layzer.load()
-                self.docs_dict[new_filename] = docs
+                self.docs_dict_page[new_filename] = docs
                 counter += 1
-        return self.docs_dict
+
+        print("Data loaded successfully!")
+        return
+    
+    def chunking(self):
+        if self.docs_dict_page == {}:
+            print("Have you called load_data()?")
+            return False
+        
+        text_splitter = RecursiveCharacterTextSplitter.from_language(
+            chunk_size=1500, chunk_overlap=200, language=Language.HTML
+        )
+
+        print("Splitting each document into chunks...")
+        for i, docs in self.docs_dict_page.items():
+            print("Splitting {}-th file".format(i))
+            chunks = text_splitter.split_documents(docs)
+            self.docs_dict_chunk[i] = chunks
+        
+        print("Document splitting completed!")
+        return True
 
 class UpstageAPI:
     def __init__(self):
@@ -133,12 +151,12 @@ class OracleDBIndex:
         )
 
 def main():
+    # Load environment variables
+    load_dotenv()
+    warnings.filterwarnings("ignore")
+
     data_loader = DataLoader("data/")
     docs_dict = data_loader.load_data()
-
-    upstage_api = UpstageAPI()
-    chat_result = upstage_api.chat("What about Korea?")
-    pprint(chat_result)
 
     oracle_db = OracleDB()
     conn = oracle_db.connect()

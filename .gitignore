@@ -3,4 +3,5 @@
 local_cache
 .venv
 pdfs
+data
 __pycache__/
