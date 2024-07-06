@@ -1,0 +1,11 @@
+streamlit
+tempfile
+array
+os
+sys
+oracledb
+langchain_community
+langchain
+langchain_upstage
+langchain_core
+langchain_text_splitters
