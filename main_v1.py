@@ -11,12 +11,14 @@ import time
 from dotenv import load_dotenv
 from openai import OpenAI
 import oracledb
+from tavily import TavilyClient
 
 # upstage imports
 from langchain_upstage import (
      UpstageLayoutAnalysisLoader,
      UpstageEmbeddings,
-     ChatUpstage
+     ChatUpstage,
+     UpstageGroundednessCheck,
 )
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -33,6 +35,8 @@ from langchain_text_splitters import (
     Language,
     RecursiveCharacterTextSplitter,
 )
+from langchain_core.tools import tool
+
 
 class DataLoader:
     def __init__(self, data_path):
@@ -90,6 +94,8 @@ class UpstageAPI:
             ],
         )
         return chat_result
+    
+    
 
 class OracleDB:
     def __init__(self):
@@ -137,6 +143,10 @@ class LLMInvoker:
         )
         response = chain.invoke(question)
         return response
+    def groundedness_check(self,response):
+        groundedness = UpstageGroundednessCheck()
+        groundedness_result = groundedness.invoke(response)
+        return groundedness_result.lower().startswith("Grounded")
 
 class OracleDBIndex:
     @staticmethod
@@ -149,7 +159,29 @@ class OracleDBIndex:
                 "idx_type": "IVF",
             },
         )
+class Tools:
+    
+    def __init__(self):
+        self.tools = [pdf_search, internet_search]
+        
+    @tool
+    def pdf_search(self, query: str)->str:
+        """Query for the pdf search, given by the user.
+        If the user asks answer for the question, primarily the answer is searched in the pdf.
+        """
+        return DataLoader.docs_dict
 
+    @tool
+    def internet_search(self, query: str)->str:
+        """Query for the internet search, in search engine like GOOGLE.
+        If the user asks answer for the general question searched for the internet.
+        """
+        return tavily.search(query=query)
+    
+    def add_tools(self, llm):
+        return llm.bind_tools(self.tools)
+    
+    
 def main():
     # Load environment variables
     load_dotenv()
@@ -167,6 +199,9 @@ def main():
     retriever = vector_store.as_retriever()
     llm_invoker = LLMInvoker(retriever)
     
+    tool = Tools()
+    llm_invoker.llm = tool.add_tools(llm_invoker.llm)
+    
     while True:
         user_input = input("You: ")
         if user_input.lower() in ['exit', 'quit']:
@@ -175,7 +210,27 @@ def main():
                                                         {context} 
                                                         Question: {question} 
                                                      """)
-        print("Bot:", response)
+        if llm_invoker.groundedness_check(response):
+            print("Bot:", response)
+
+        else:
+            for _ in range(3):
+                tool_calls = llm_invoker.llm.invoke(user_input).tool_calls
+                if tool_calls:
+                    break
+            if not tool_calls:
+                print("I'm sorry, I don't have an answer for that.")
+            
+            context = ""
+            for tool_call in tool_calls:
+                context += str(call_tool_func(tool_call))
+
+            response = llm_invoker.invokellm(user_input, """Answer the question based only on the following context:
+                                                        {context} 
+                                                        Question: {question} 
+                                                     """)
+            print("Bot:", response)
+
 
     OracleDBIndex.create_index(conn, vector_store)
 
