@@ -100,21 +100,6 @@ class UpstageAPI:
         return chat_result
 
 class OracleDB:
-    def __init__(self):
-        self.username = os.environ["DB_USER"]
-        self.password = os.environ["DB_PASSWORD"]
-        self.dsn = os.environ["DSN"]
-        self.conn = None
-    
-    def connect(self):
-        try: 
-            self.conn = oracledb.connect(user=self.username, password=self.password, dsn=self.dsn)
-            print("Connection successful!", self.conn.version)
-        except Exception as e:
-            print("Connection failed!")
-        return self.conn
-
-class OracleDB:
     def __init__(self, docs_dict):
         self.username = os.environ["DB_USER"]
         self.password = os.environ["DB_PASSWORD"]
