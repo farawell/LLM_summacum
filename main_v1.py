@@ -41,19 +41,18 @@ class DataLoader:
         self.data_path = data_path
         self.docs_dict_page = {}
         self.docs_dict_chunk = {}
+        print("DataLoader initialized!")
     
     def load_data(self):
+        print("Loading data...")
         counter = 1
         for filename in os.listdir(self.data_path):
             print("Loading {}-th data...".format(counter))
             if filename.endswith(".pdf"):
-                new_filename = f"{counter}.pdf"
-                old_file_path = os.path.join(self.data_path, filename)
-                new_file_path = os.path.join(self.data_path, new_filename)
-                os.rename(old_file_path, new_file_path)
-                layzer = UpstageLayoutAnalysisLoader(new_file_path, split="page")
+                file_path = os.path.join(self.data_path, filename)
+                layzer = UpstageLayoutAnalysisLoader(file_path, split="page")
                 docs = layzer.load()
-                self.docs_dict_page[new_filename] = docs
+                self.docs_dict_page[counter] = docs
                 counter += 1
 
         print("Data loaded successfully!")
@@ -64,14 +63,20 @@ class DataLoader:
             print("Have you called load_data()?")
             return False
         
+        print("Chunking documents...")
+    
         text_splitter = RecursiveCharacterTextSplitter.from_language(
-            chunk_size=1500, chunk_overlap=200, language=Language.HTML
+                        chunk_size=1500, 
+                        chunk_overlap=200, 
+                        language=Language.HTML
         )
 
         print("Splitting each document into chunks...")
         for i, docs in self.docs_dict_page.items():
             print("Splitting {}-th file".format(i))
             chunks = text_splitter.split_documents(docs)
+            for chunk in chunks:
+                chunk.metadata['title_idx'] = "{}-th pdf".format(i)
             self.docs_dict_chunk[i] = chunks
         
         print("Document splitting completed!")
@@ -213,10 +218,10 @@ class Tools:
         return selected_tool.invoke(tool_call["args"])
 
 def main():
-    data_loader = DataLoader("data/")
+    data_loader = DataLoader("./data/")
     docs_dict = data_loader.load_data()
 
-    oracle_db = OracleDB()
+    oracle_db = OracleDB(docs_dict)
     conn = oracle_db.connect()
     if(oracle_db.configure_knowledge_base()):
         vector_store = oracle_db.get_vector_store()
