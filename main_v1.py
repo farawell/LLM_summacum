@@ -181,6 +181,15 @@ class Tools:
     def add_tools(self, llm):
         return llm.bind_tools(self.tools)
     
+    def call_tool_func(tool_call):
+        tool_name = tool_call["name"].lower()
+        if tool_name not in globals():
+            print("Tool not found", tool_name)
+            return None
+        selected_tool = globals()[tool_name]
+        
+        return selected_tool.invoke(tool_call["args"])
+    
     
 def main():
     # Load environment variables
@@ -220,10 +229,11 @@ def main():
                     break
             if not tool_calls:
                 print("I'm sorry, I don't have an answer for that.")
+                break
             
             context = ""
             for tool_call in tool_calls:
-                context += str(call_tool_func(tool_call))
+                context += str(tool.call_tool_func(tool_call))
 
             response = llm_invoker.invokellm(user_input, """Answer the question based only on the following context:
                                                         {context} 
