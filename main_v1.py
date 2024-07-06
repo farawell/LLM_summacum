@@ -11,6 +11,7 @@ import time
 from dotenv import load_dotenv
 from openai import OpenAI
 import oracledb
+from tavily import TavilyClient as tavily
 
 # upstage imports
 from langchain_upstage import (
@@ -33,6 +34,7 @@ from langchain_text_splitters import (
     Language,
     RecursiveCharacterTextSplitter,
 )
+from langchain_core.tools import tool
 
 class DataLoader:
     def __init__(self, data_path):
@@ -75,6 +77,7 @@ class DataLoader:
         print("Document splitting completed!")
         return True
 
+# Deprecated
 class UpstageAPI:
     def __init__(self):
         self.client = OpenAI(
@@ -106,21 +109,61 @@ class OracleDB:
             print("Connection failed!")
         return self.conn
 
-class EmbeddingSettings:
-    def __init__(self, conn, docs):
-        self.conn = conn
-        self.docs = docs
+class OracleDB:
+    def __init__(self, docs_dict):
+        self.username = os.environ["DB_USER"]
+        self.password = os.environ["DB_PASSWORD"]
+        self.dsn = os.environ["DSN"]
+
+        self.docs_dict = docs_dict
         self.upstage_embeddings = UpstageEmbeddings(model="solar-embedding-1-large")
-        self.knowledge_base = OracleVS.from_documents(docs, self.upstage_embeddings, client=conn, 
-                                                      table_name="text_embeddings2", 
-                                                      distance_strategy=DistanceStrategy.DOT_PRODUCT)
-    
+        self.conn = None
+        self.knowledge_base = None
+
+    def connect(self):
+        try: 
+            self.conn = oracledb.connect(user=self.username, 
+                                         password=self.password, 
+                                         dsn=self.dsn)
+            print("Connection successful!", self.conn.version)
+            return True
+        except Exception as e:
+            print("Connection failed!")
+            return False
+        
+    def configure_knowledge_base(self):
+        if self.conn == None:
+            print("Have you called connect()? self.conn is empty.")
+            return False
+
+        print("Saving data into DB...")
+        for i in range(len(self.docs_dict)):
+            print("Saving {}-th data".format(i))
+            self.knowledge_base = \
+            OracleVS.from_documents(self.docs_dict[i], 
+                                    self.upstage_embeddings, 
+                                    client=self.conn, 
+                                    table_name="text_embedding_{}".format(i), 
+                                    distance_strategy=DistanceStrategy.DOT_PRODUCT)
+        
     def get_vector_store(self):
         vector_store = OracleVS(client=self.conn, 
                                 embedding_function=self.upstage_embeddings, 
                                 table_name="text_embeddings2", 
                                 distance_strategy=DistanceStrategy.DOT_PRODUCT)
         return vector_store
+
+class OracleDBIndex:
+    @staticmethod
+    def create_index(conn, vector_store):
+        oraclevs.create_index(
+            client=conn,
+            vector_store=vector_store,
+            params={
+                "idx_name": "ivf_idx1",
+                "idx_type": "IVF",
+            },
+        )
 
 class LLMInvoker:
     def __init__(self, retriever):
@@ -138,34 +181,51 @@ class LLMInvoker:
         response = chain.invoke(question)
         return response
 
-class OracleDBIndex:
-    @staticmethod
-    def create_index(conn, vector_store):
-        oraclevs.create_index(
-            client=conn,
-            vector_store=vector_store,
-            params={
-                "idx_name": "ivf_idx1",
-                "idx_type": "IVF",
-            },
-        )
+class Tools:
+    
+    def __init__(self):
+        self.tools = [pdf_search, internet_search]
+        
+    @tool
+    def pdf_search(self, query: str)->str:
+        """Query for the pdf search, given by the user.
+        If the user asks answer for the question, primarily the answer is searched in the pdf.
+        """
+        return DataLoader.docs_dict
+
+    @tool
+    def internet_search(self, query: str)->str:
+        """Query for the internet search, in search engine like GOOGLE.
+        If the user asks answer for the general question searched for the internet.
+        """
+        return tavily.search(query=query)
+    
+    def add_tools(self, llm):
+        return llm.bind_tools(self.tools)
+    
+    def call_tool_func(tool_call):
+        tool_name = tool_call["name"].lower()
+        if tool_name not in globals():
+            print("Tool not found", tool_name)
+            return None
+        selected_tool = globals()[tool_name]
+        
+        return selected_tool.invoke(tool_call["args"])
 
 def main():
-    # Load environment variables
-    load_dotenv()
-    warnings.filterwarnings("ignore")
-
     data_loader = DataLoader("data/")
     docs_dict = data_loader.load_data()
 
     oracle_db = OracleDB()
     conn = oracle_db.connect()
-
-    embedding_settings = EmbeddingSettings(conn, docs_dict)
-    vector_store = embedding_settings.get_vector_store()
-
+    if(oracle_db.configure_knowledge_base()):
+        vector_store = oracle_db.get_vector_store()
     retriever = vector_store.as_retriever()
+
     llm_invoker = LLMInvoker(retriever)
+    
+    tool = Tools()
+    llm_invoker.llm = tool.add_tools(llm_invoker.llm)
     
     while True:
         user_input = input("You: ")
@@ -175,7 +235,28 @@ def main():
                                                         {context} 
                                                         Question: {question} 
                                                      """)
-        print("Bot:", response)
+        if llm_invoker.groundedness_check(response):
+            print("Bot:", response)
+
+        else:
+            for _ in range(3):
+                tool_calls = llm_invoker.llm.invoke(user_input).tool_calls
+                if tool_calls:
+                    break
+            if not tool_calls:
+                print("I'm sorry, I don't have an answer for that.")
+                break
+            
+            context = ""
+            for tool_call in tool_calls:
+                context += str(tool.call_tool_func(tool_call))
+
+            response = llm_invoker.invokellm(user_input, """Answer the question based only on the following context:
+                                                        {context} 
+                                                        Question: {question} 
+                                                     """)
+            print("Bot:", response)
+
 
     OracleDBIndex.create_index(conn, vector_store)
 
